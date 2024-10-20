@@ -64,23 +64,75 @@ const unsigned char char_code_set[][2] = {
     {'Y', 0b01110110}, /* Y */
 };
 
+const char task_status_code[][2] = {
+    {'COMPLITE', 0b01100010},
+    {'EXECUTION', 0b01100000},
+    {'STOP', 0b01001000},
+};
+
 void up_counter();
 void down_counter();
 void reset_counter();
 void do_somthings();
 void show_count();
-void task_scrollText(char *text);
 
-typedef void (*callback_function_char)(char *_c);
+uint8_t tas_bit_clear(uint8_t number, uint8_t n);
+uint8_t task_get_code_char(unsigned char c);
+void task_display_moving_text(char *text);
+void task_display_char(unsigned char _c, byte _digit);
+void task_display_text(char *text);
+void task_button_panel_input();
+
+// typedef void (*callback_function_char)(char *_c);
 
 bool first_start = true;
 int count, resistor = 0;
-char buf[5];
+// char buf[5];
 unsigned long last_out = 0;
 unsigned long button_panel_out = 0;
 Bounce up_debouncer;
 Bounce down_debouncer;
 char message01[13] = "HELLO FRIEND";
+
+struct TM_Flag
+{
+  uint8_t error_code = 0;
+  uint8_t task_id = 0;
+  byte task_priority = 0;
+  uint8_t task_status = 0;
+};
+
+class TM_Display_Buffer_Operations
+{
+public:
+  TM_Display_Buffer_Operations() {}
+  void bufferTextFormat()
+  {
+    sprintf(buffer, "%4s", " ");
+  }
+  void buffer1DigitFormat()
+  {
+    sprintf(buffer, "%01d", count);
+  }
+  void buffer2DigitFormat()
+  {
+    sprintf(buffer, "%01d", count);
+  }
+  void buffer3DigitFormat()
+  {
+    sprintf(buffer, "%01d", count);
+  }
+  void buffer4DigitFormat()
+  {
+    sprintf(buffer, "%01d", count);
+  }
+  char *buffer = new char[5];
+
+private:
+  TM_Flag flag;
+};
+
+TM_Display_Buffer_Operations buffer_operation;
 
 class TM_Timer
 {
@@ -141,77 +193,77 @@ class TM_Task
 {
 public:
   TM_Task() {}
-  TM_Task(unsigned long _prd)
+  TM_Task(unsigned long _prd, uint8_t id, byte priority)
   {
     task_timer.setPeriod(_prd);
+    flag.task_priority = priority;
+    flag.task_id = id;
   }
   void start_task()
   {
     complete = false;
     execution = true;
     task_timer.start();
+    flag.task_status = 0b01100000;
   }
-  void stop_task()
+  void stop_task(uint8_t error_code)
   {
     execution = false;
     task_timer.stop();
-  }
-  void attach(callback_function_char _handler)
-  {
-    this->_handler = _handler;
-  }
-  void invoke(char *_c, callback_function_char)
-  {
-    _handler(_c);
+    flag.task_status = 0b01001000;
+    if (error_code != 0)
+    {
+      flag.error_code = error_code;
+    }
   }
   virtual void do_task() {};
+  virtual void special_task() {};
+  TM_Timer task_timer;
+
   bool complete = false;
   bool execution = false;
-  callback_function_char _handler = nullptr;
-  TM_Timer task_timer;
+  TM_Flag flag;
 };
 
 class RuningLine : public TM_Task
 {
 public:
   RuningLine() {}
-  RuningLine(unsigned long timer)
+  RuningLine(unsigned long _prd, uint8_t id, byte priority)
   {
-    task_timer.setPeriod(timer);
+    TM_Task(_prd, id, priority);
   }
-  RuningLine(unsigned long timer, char *text)
+  void setMessage(char *message)
   {
-    task_timer.setPeriod(timer);
-    message = text;
-    len = strlen(text);
+    this->message = message;
+    len = strlen(message);
   }
-  void do_task()
+  void do_task() override
   {
     if (task_timer.tick())
     {
-      if (execution && !complete)
+      if (execution)
       {
         if (len == 0 || loop_line_count >= len)
         {
           complete = true;
           loop_line_count = 0;
-          stop_task();
+          flag.task_status = 0b01100010;
+          stop_task(0);
         }
         if (!complete)
         {
           char *tmp = new char[5];
           sprintf(tmp, "%4s", " ");
-          sprintf(buf, "%4s", " ");
-
+          buffer_operation.bufferTextFormat();
           for (int j = 0; j < 4; j++)
           {
             if ((loop_line_count + j) < len)
             {
               tmp[j] = message[loop_line_count + j];
-              buf[j] = message[loop_line_count + j];
+              buffer_operation.buffer[j] = message[loop_line_count + j];
             }
           }
-          invoke(tmp, _handler);
           loop_line_count++;
           task_timer.restart();
           tmp = nullptr;
@@ -226,113 +278,68 @@ private:
   int loop_line_count = 0;
 };
 
-class DisplayText : public TM_Task
+class DisplayChain : public TM_Task
 {
 public:
-  DisplayText() {}
-  DisplayText(unsigned long timer)
+  DisplayChain() {}
+  DisplayChain(unsigned long _prd, uint8_t id, byte priority)
   {
-    task_timer.setPeriod(timer);
+    TM_Task(_prd, id, priority);
   }
-  DisplayText(unsigned long timer, char *text)
+  DisplayChain(unsigned long timer, char *text)
   {
     task_timer.setPeriod(timer);
-    message = text;
-    len = strlen(text);
+    this->text = text;
+  }
+  void do_task() override
+  {
+    if (task_timer.tick())
+    {
+      if (execution)
+      {
+        if (!complete)
+        {
+          task_display_text(text);
+        }
+      }
+    }
+  }
+  void setText(char *text)
+  {
+    this->text = text;
   }
 
 private:
-  char *message;
-  int len = 0;
-  int loop_line_count = 0;
-};
+  char *text;
+  int len = 5;
 
-class DisplayChar : public TM_Task
-{
-};
-
-class DisplayCount : public TM_Task
-{
-};
-
-class FourDigitsDisplay
-{
-public:
-  FourDigitsDisplay(int _clockPin, int _latchPin1, int _latchPin2, int _dataPin)
+  void task_display_text(char *text)
   {
-    clockPin = _clockPin;
-    latchPin1 = _latchPin1;
-    latchPin2 = _latchPin2;
-    dataPin = _dataPin;
-
-    pinMode(clockPin, OUTPUT);
-    pinMode(latchPin1, OUTPUT);
-    pinMode(latchPin2, OUTPUT);
-    pinMode(dataPin, OUTPUT);
-  }
-
-  void shiftOutText(char *text)
-  {
-    int len = strlen(text);
     int idx = 4;
 
     for (int i = len - 1; i >= 0; --i)
     {
-      shiftOutChar(text[i], idx++);
+      task_display_char(text[i], idx++);
     }
   }
-  void ledOn()
+
+  void task_display_char(unsigned char _c, uint8_t _digit)
   {
+    uint8_t sevseg = task_get_code_char(_c);
+
     uint8_t value = 0b11110000;
-    uint8_t prog_led = 0b00001000;
+    bitClear(value, (uint8_t)_digit);
 
-    digitalWrite(latchPin1, LOW);
-    shiftOut(dataPin, clockPin, LSBFIRST, value);
-    digitalWrite(latchPin1, HIGH);
+    digitalWrite(LATCH_PIN1, LOW);
+    shiftOut(DATA_PIN, CLOCK_PIN, LSBFIRST, value);
+    digitalWrite(LATCH_PIN1, HIGH);
 
-    digitalWrite(latchPin2, LOW);
-    shiftOut(dataPin, clockPin, LSBFIRST, ~prog_led);
-    digitalWrite(latchPin2, HIGH);
+    digitalWrite(LATCH_PIN2, LOW);
+    shiftOut(DATA_PIN, CLOCK_PIN, LSBFIRST, sevseg);
+    digitalWrite(LATCH_PIN2, HIGH);
   }
 
-  void scrollText(char *text, long delayTime)
-  {
-    int len = strlen(text);
-    if (len == 0)
-      return;
-
-    char *tmp = new char[5];
-
-    for (int i = 0; i < len; i++)
-    {
-      sprintf(tmp, "%4s", " ");
-
-      for (int j = 0; j < 4; j++)
-      {
-        if ((i + j) < len)
-          tmp[j] = text[i + j];
-      }
-
-      unsigned long tms = millis() + delayTime;
-
-      while (millis() < tms)
-      {
-        shiftOutText(tmp);
-        yield();
-      }
-    }
-  }
-
-private:
-  int clockPin, latchPin1, latchPin2, dataPin;
-  const int max = MAX_COUNT;
-  const int min = MIN_COUNT;
-  uint8_t bit_clear(uint8_t number, uint8_t n)
-  {
-    return number & ~((uint8_t)1 << n);
-  }
-
-  uint8_t getCodeSetChar(unsigned char c)
+  uint8_t task_get_code_char(unsigned char c)
   {
     uint8_t result = 0;
     for (unsigned int i = 0; i < sizeof(char_code_set); i++)
@@ -346,39 +353,89 @@ private:
     }
     return result;
   }
-  void softDelay(long delayTime)
+
+  uint8_t tas_bit_clear(uint8_t number, uint8_t n)
   {
-    unsigned long tms = millis() + delayTime;
-
-    while (millis() < tms)
-    {
-      yield();
-    }
-  }
-
-  void shiftOutChar(unsigned char _c, byte _digit)
-  {
-    byte sevseg = getCodeSetChar(_c);
-
-    uint8_t value = 0b11110000;
-    bitClear(value, (uint8_t)_digit);
-
-    digitalWrite(latchPin1, LOW);
-    shiftOut(dataPin, clockPin, LSBFIRST, value);
-    digitalWrite(latchPin1, HIGH);
-
-    digitalWrite(latchPin2, LOW);
-    shiftOut(dataPin, clockPin, LSBFIRST, sevseg);
-    digitalWrite(latchPin2, HIGH);
-
-    softDelay(SWITCHED_SPEED);
+    return number & ~((uint8_t)1 << n);
   }
 };
 
-FourDigitsDisplay myDisplay(CLOCK_PIN, LATCH_PIN1, LATCH_PIN2, DATA_PIN);
-RuningLine testLine(500, message01);
+class Counter : public TM_Task
+{
+};
 
-void button_panel_input()
+class ButtonPanel : public TM_Task
+{
+public:
+  ButtonPanel() {}
+  ButtonPanel(unsigned long _prd, uint8_t id, byte priority)
+  {
+    TM_Task(_prd, id, priority);
+  }
+};
+
+RuningLine runing_line(500, 0b01100000, 8);
+
+void setup()
+{
+  Serial.begin(9600);
+  pinMode(UP_PIN, INPUT_PULLUP);
+  pinMode(DOWN_PIN, INPUT_PULLUP);
+
+  pinMode(BUTTON_LATCH_PIN, OUTPUT);
+  pinMode(BUTTON_CLOCK_PIN, OUTPUT);
+  pinMode(BUTTON_DATA_PIN, INPUT);
+
+  pinMode(CLOCK_PIN, OUTPUT);
+  pinMode(LATCH_PIN1, OUTPUT);
+  pinMode(LATCH_PIN2, OUTPUT);
+  pinMode(DATA_PIN, OUTPUT);
+
+  up_debouncer.attach(UP_PIN);
+  up_debouncer.interval(5);
+  down_debouncer.attach(DOWN_PIN);
+  down_debouncer.interval(5);
+
+  digitalWrite(BUTTON_CLOCK_PIN, HIGH);
+  digitalWrite(BUTTON_LATCH_PIN, HIGH);
+
+  show_count();
+
+  runing_line.setMessage(message01);
+}
+
+//=============LOOP============================
+void loop()
+{
+  unsigned long tms = millis();
+
+  up_debouncer.update();
+  down_debouncer.update();
+
+  if (up_debouncer.fell())
+  {
+    up_counter();
+  }
+  else if (down_debouncer.fell())
+  {
+    down_counter();
+  }
+  else
+  {
+    // myDisplay.shiftOutText(buf);
+    runing_line.do_task();
+  }
+
+  if ((tms - last_out) > 100)
+  {
+    last_out = tms;
+    button_panel_input();
+    // show_count();
+  }
+}
+//===============================================
+
+void task_button_panel_input()
 {
   static uint8_t last_input_states = 0;
   uint8_t curr_states = 0;
@@ -405,21 +462,21 @@ void button_panel_input()
           if (i == BUTTON_UP)
           {
             up_counter();
-            testLine.stop_task();
+            runing_line.stop_task(0);
           }
           if (i == BUTTON_DOWN)
           {
             down_counter();
-            testLine.stop_task();
+            runing_line.stop_task(0);
           }
           if (i == BUTTON_RESET)
           {
             reset_counter();
-            testLine.stop_task();
+            runing_line.stop_task(0);
           }
           if (i == BUTTON_FORWARD)
           {
-            testLine.start_task();
+            runing_line.start_task();
           }
           if (i == BUTTON_PROG)
           {
@@ -431,11 +488,6 @@ void button_panel_input()
     }
     first_start = false;
   }
-}
-
-void task_scrollText(char *text)
-{
-  myDisplay.shiftOutText(text);
 }
 
 void up_counter()
@@ -451,11 +503,6 @@ void down_counter()
 void reset_counter()
 {
   count = 0;
-}
-
-void do_somthings()
-{
-  myDisplay.scrollText(message01, 200 + resistor);
 }
 
 void show_count()
@@ -475,57 +522,5 @@ void show_count()
   else if (count > 1000)
   {
     sprintf(buf, "%04d", count);
-  }
-}
-
-void setup()
-{
-  Serial.begin(9600);
-  pinMode(UP_PIN, INPUT_PULLUP);
-  pinMode(DOWN_PIN, INPUT_PULLUP);
-
-  pinMode(BUTTON_LATCH_PIN, OUTPUT);
-  pinMode(BUTTON_CLOCK_PIN, OUTPUT);
-  pinMode(BUTTON_DATA_PIN, INPUT);
-
-  up_debouncer.attach(UP_PIN);
-  up_debouncer.interval(5);
-  down_debouncer.attach(DOWN_PIN);
-  down_debouncer.interval(5);
-
-  digitalWrite(BUTTON_CLOCK_PIN, HIGH);
-  digitalWrite(BUTTON_LATCH_PIN, HIGH);
-
-  show_count();
-
-  testLine.attach(task_scrollText);
-}
-
-void loop()
-{
-  unsigned long tms = millis();
-
-  up_debouncer.update();
-  down_debouncer.update();
-
-  if (up_debouncer.fell())
-  {
-    up_counter();
-  }
-  else if (down_debouncer.fell())
-  {
-    down_counter();
-  }
-  else
-  {
-    myDisplay.shiftOutText(buf);
-    testLine.do_task();
-  }
-
-  if ((tms - last_out) > 100)
-  {
-    last_out = tms;
-    button_panel_input();
-    // show_count();
   }
 }
