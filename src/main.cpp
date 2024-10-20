@@ -3,7 +3,7 @@
 
 #define MAX_COUNT 9999
 #define MIN_COUNT 0
-#define SWITCHED_SPEED 6
+#define SWITCHED_SPEED 7
 #define TEXT_TIMER 500
 #define DATA_PIN 5   // 3
 #define CLOCK_PIN 4  // 2
@@ -64,11 +64,11 @@ const unsigned char char_code_set[][2] = {
     {'Y', 0b01110110}, /* Y */
 };
 
-const char task_status_code[][2] = {
-    {'COMPLITE', 0b01100010},
-    {'EXECUTION', 0b01100000},
-    {'STOP', 0b01001000},
-};
+// const char task_status_code[][2] = {
+//     {'COMPLITE', 0b01100010},
+//     {'EXECUTION', 0b01100000},
+//     {'STOP', 0b01001000},
+// };
 
 void up_counter();
 void down_counter();
@@ -76,11 +76,6 @@ void reset_counter();
 void do_somthings();
 void show_count();
 
-uint8_t tas_bit_clear(uint8_t number, uint8_t n);
-uint8_t task_get_code_char(unsigned char c);
-void task_display_moving_text(char *text);
-void task_display_char(unsigned char _c, byte _digit);
-void task_display_text(char *text);
 void task_button_panel_input();
 
 // typedef void (*callback_function_char)(char *_c);
@@ -92,7 +87,7 @@ unsigned long last_out = 0;
 unsigned long button_panel_out = 0;
 Bounce up_debouncer;
 Bounce down_debouncer;
-char message01[13] = "HELLO FRIEND";
+char message01[14] = "HELLO FRIEND ";
 
 struct TM_Flag
 {
@@ -105,7 +100,14 @@ struct TM_Flag
 class TM_Display_Buffer_Operations
 {
 public:
-  TM_Display_Buffer_Operations() {}
+  TM_Display_Buffer_Operations()
+  {
+    bufferTextFormat();
+  }
+  ~TM_Display_Buffer_Operations()
+  {
+    buffer = nullptr;
+  }
   void bufferTextFormat()
   {
     sprintf(buffer, "%4s", " ");
@@ -127,9 +129,6 @@ public:
     sprintf(buffer, "%01d", count);
   }
   char *buffer = new char[5];
-
-private:
-  TM_Flag flag;
 };
 
 TM_Display_Buffer_Operations buffer_operation;
@@ -146,6 +145,10 @@ public:
   void setPeriod(unsigned long _prd)
   {
     _prd <= 0 ? _period = 1 : _period = _prd;
+  }
+  unsigned long getPeriod()
+  {
+    return _period;
   }
 
   void start()
@@ -193,20 +196,14 @@ class TM_Task
 {
 public:
   TM_Task() {}
-  TM_Task(unsigned long _prd, uint8_t id, byte priority)
-  {
-    task_timer.setPeriod(_prd);
-    flag.task_priority = priority;
-    flag.task_id = id;
-  }
-  void start_task()
+  virtual void start_task()
   {
     complete = false;
     execution = true;
     task_timer.start();
     flag.task_status = 0b01100000;
   }
-  void stop_task(uint8_t error_code)
+  virtual void stop_task(uint8_t error_code)
   {
     execution = false;
     task_timer.stop();
@@ -218,11 +215,12 @@ public:
   }
   virtual void do_task() {};
   virtual void special_task() {};
-  TM_Timer task_timer;
 
+private:
+  TM_Timer task_timer;
+  TM_Flag flag;
   bool complete = false;
   bool execution = false;
-  TM_Flag flag;
 };
 
 class RuningLine : public TM_Task
@@ -231,12 +229,31 @@ public:
   RuningLine() {}
   RuningLine(unsigned long _prd, uint8_t id, byte priority)
   {
-    TM_Task(_prd, id, priority);
+    task_timer.setPeriod(_prd);
+    flag.task_priority = priority;
+    flag.task_id = id;
   }
   void setMessage(char *message)
   {
     this->message = message;
     len = strlen(message);
+  }
+  void start_task() override
+  {
+    complete = false;
+    execution = true;
+    task_timer.start();
+    flag.task_status = 0b01100000;
+  }
+  void stop_task(uint8_t error_code) override
+  {
+    execution = false;
+    task_timer.stop();
+    flag.task_status = 0b01001000;
+    if (error_code != 0)
+    {
+      flag.error_code = error_code;
+    }
   }
   void do_task() override
   {
@@ -266,6 +283,7 @@ public:
           }
           loop_line_count++;
           task_timer.restart();
+          Serial.println(tmp);
           tmp = nullptr;
         }
       }
@@ -273,6 +291,11 @@ public:
   }
 
 private:
+  TM_Timer task_timer;
+  TM_Flag flag;
+  bool complete = false;
+  bool execution = false;
+
   char *message;
   int len = 0;
   int loop_line_count = 0;
@@ -284,46 +307,65 @@ public:
   DisplayChain() {}
   DisplayChain(unsigned long _prd, uint8_t id, byte priority)
   {
-    TM_Task(_prd, id, priority);
+    task_timer.setPeriod(_prd);
+    flag.task_priority = priority;
+    flag.task_id = id;
+    this->text = buffer_operation.buffer;
   }
-  DisplayChain(unsigned long timer, char *text)
+  void start_task() override
   {
-    task_timer.setPeriod(timer);
-    this->text = text;
+    complete = false;
+    execution = true;
+    task_timer.start();
+    flag.task_status = 0b01100000;
+  }
+  void stop_task(uint8_t error_code) override
+  {
+    execution = false;
+    task_timer.stop();
+    flag.task_status = 0b01001000;
+    if (error_code != 0)
+    {
+      flag.error_code = error_code;
+    }
   }
   void do_task() override
   {
-    if (task_timer.tick())
+    if (execution)
     {
-      if (execution)
+      if (!complete)
       {
-        if (!complete)
+        if (pos >= 0)
         {
-          task_display_text(text);
+          if (task_timer.tick())
+          {
+            task_display_char(text[pos], idx);
+            pos--;
+            idx++;
+            task_timer.restart();
+          }
+        }
+        else
+        {
+          pos = len - 1;
+          idx = 4;
         }
       }
     }
   }
-  void setText(char *text)
-  {
-    this->text = text;
-  }
 
 private:
+  TM_Timer task_timer;
+  TM_Flag flag;
+  bool complete = false;
+  bool execution = false;
+
   char *text;
-  int len = 5;
+  int len = 4;
+  byte idx = 4;
+  int pos = len-1;
 
-  void task_display_text(char *text)
-  {
-    int idx = 4;
-
-    for (int i = len - 1; i >= 0; --i)
-    {
-      task_display_char(text[i], idx++);
-    }
-  }
-
-  void task_display_char(unsigned char _c, uint8_t _digit)
+  void task_display_char(unsigned char _c, byte _digit)
   {
     uint8_t sevseg = task_get_code_char(_c);
 
@@ -370,11 +412,11 @@ public:
   ButtonPanel() {}
   ButtonPanel(unsigned long _prd, uint8_t id, byte priority)
   {
-    TM_Task(_prd, id, priority);
   }
 };
 
-RuningLine runing_line(500, 0b01100000, 8);
+RuningLine runing_line(TEXT_TIMER, 0b01100000, 8);
+DisplayChain display_chain(SWITCHED_SPEED, 0b11011010, 1);
 
 void setup()
 {
@@ -399,9 +441,10 @@ void setup()
   digitalWrite(BUTTON_CLOCK_PIN, HIGH);
   digitalWrite(BUTTON_LATCH_PIN, HIGH);
 
-  show_count();
+  // show_count();
 
   runing_line.setMessage(message01);
+  display_chain.start_task();
 }
 
 //=============LOOP============================
@@ -422,14 +465,16 @@ void loop()
   }
   else
   {
-    // myDisplay.shiftOutText(buf);
+    display_chain.do_task();
     runing_line.do_task();
+    // myDisplay.shiftOutText(buf);
+    // runing_line.do_task();
   }
 
   if ((tms - last_out) > 100)
   {
     last_out = tms;
-    button_panel_input();
+    task_button_panel_input();
     // show_count();
   }
 }
@@ -505,22 +550,22 @@ void reset_counter()
   count = 0;
 }
 
-void show_count()
-{
-  if (count < 10)
-  {
-    sprintf(buf, "%01d", count);
-  }
-  else if (count >= 10 && count < 100)
-  {
-    sprintf(buf, "%02d", count);
-  }
-  else if (count >= 10 && count < 1000)
-  {
-    sprintf(buf, "%03d", count);
-  }
-  else if (count > 1000)
-  {
-    sprintf(buf, "%04d", count);
-  }
-}
+// void show_count()
+// {
+//   if (count < 10)
+//   {
+//     sprintf(buf, "%01d", count);
+//   }
+//   else if (count >= 10 && count < 100)
+//   {
+//     sprintf(buf, "%02d", count);
+//   }
+//   else if (count >= 10 && count < 1000)
+//   {
+//     sprintf(buf, "%03d", count);
+//   }
+//   else if (count > 1000)
+//   {
+//     sprintf(buf, "%04d", count);
+//   }
+// }
